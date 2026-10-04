@@ -22,8 +22,19 @@
     </fieldset>
 
     <fieldset>
+        <legend>Techniques</legend>
+        <ul class="search-filters tag-list">
+            {%- for technique_item in site.data.techniques -%}
+                {%- assign technique_id = technique_item[0] -%}
+                {%- assign technique = technique_item[1] -%}
+                <li><a href="#///^{{ technique_id | downcase }}$" data-filter-group="technique" data-filter-label="{{ technique_id | downcase }}" data-title="{{ technique_id }}: {{ technique.name }}">{{ technique_id }}</a></li>
+            {%- endfor -%}
+        </ul>
+    </fieldset>
+
+    <fieldset>
         <legend>Filter</legend>
-        <input type="text" spellcheck="false" placeholder="Search among {{ site.gtfobins | size }} executables: [<name>]/[<function>]/[<context>]"/>
+        <input type="text" spellcheck="false" placeholder="Search among {{ site.gtfobins | size }} executables: [<name>]/[<function>]/[<context>]/[<technique>]"/>
     </fieldset>
 
     <p id="result-count" aria-live="polite"></p>
@@ -70,22 +81,20 @@
 </div>
 
 <script>
-    // split a query into its name/function/context components
+    // split a query into its name/function/context/technique components
     function parseQuery(query) {
         const parts = query.split('/');
-        return { name: parts[0] || '', func: parts[1] || '', ctx: parts[2] || '' };
+        return { name: parts[0] || '', func: parts[1] || '', ctx: parts[2] || '', tech: parts[3] || '' };
     }
 
-    // rebuild a query string from its components, keeping separators minimal
-    function buildQuery({ name, func, ctx }) {
-        let query = name || '';
-        if (func || ctx) {
-            query += '/' + (func || '');
+    // rebuild a query string from its components, dropping trailing empty slots
+    function buildQuery({ name, func, ctx, tech }) {
+        const slots = [name || '', func || '', ctx || '', tech || ''];
+        let last = slots.length - 1;
+        while (last > 0 && slots[last] === '') {
+            last--;
         }
-        if (ctx) {
-            query += '/' + ctx;
-        }
-        return query;
+        return slots.slice(0, last + 1).join('/');
     }
 
     // the set of labels explicitly selected in a slot (i.e. `^label$` terms)
@@ -102,8 +111,12 @@
 
     // reflect the active filter tags based on the current query
     function updateActiveTags(query) {
-        const { func, ctx } = parseQuery(query.toLowerCase());
-        const selected = { function: slotToLabels(func), context: slotToLabels(ctx) };
+        const { func, ctx, tech } = parseQuery(query.toLowerCase());
+        const selected = {
+            function: slotToLabels(func),
+            context: slotToLabels(ctx),
+            technique: slotToLabels(tech),
+        };
         for (const anchor of document.querySelectorAll('#search-toolbox [data-filter-group]')) {
             const active = selected[anchor.dataset.filterGroup].has(anchor.dataset.filterLabel);
             anchor.parentElement.classList.toggle('active', active);
@@ -112,7 +125,7 @@
 
     function filter(query) {
         // extract query components
-        const [namePattern, functionPattern, contextPattern] = query.toLowerCase().split('/', 3).map((pattern) => {
+        const [namePattern, functionPattern, contextPattern, techniquePattern] = query.toLowerCase().split('/', 4).map((pattern) => {
             try {
                 if (pattern) {
                     return new RegExp(pattern, 'i');
@@ -150,13 +163,20 @@
                 }
 
                 // skip if empty filters
-                if (functionPattern || contextPattern) {
+                if (functionPattern || contextPattern || techniquePattern) {
                     // test the individual functions
                     let noMatchingFunctions = true;
                     for (const functionElem of functionElems) {
                         // test the function name
                         const functionMatches = !functionPattern || functionPattern.test(functionElem.dataset.functionName)
                         if (!functionMatches) {
+                            continue;
+                        }
+
+                        // test the MITRE techniques
+                        const techniqueList = (functionElem.dataset.functionTechniques || '').split(',').filter(Boolean);
+                        const techniqueMatches = !techniquePattern || techniqueList.some((technique) => techniquePattern.test(technique));
+                        if (!techniqueMatches) {
                             continue;
                         }
 
@@ -252,7 +272,7 @@
                 event.preventDefault();
 
                 const query = parseQuery(searchField.value);
-                const slot = anchor.dataset.filterGroup === 'function' ? 'func' : 'ctx';
+                const slot = { function: 'func', context: 'ctx', technique: 'tech' }[anchor.dataset.filterGroup];
                 const term = `^${anchor.dataset.filterLabel}$`;
 
                 // toggle this tag's term, preserving any other (freeform) terms
